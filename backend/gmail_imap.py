@@ -249,3 +249,95 @@ def fetch_emails(
         except Exception:
             pass
 
+
+def list_attachments(
+    email_account: str,
+    email_password: str,
+    message_id: str,
+    folder: str = "INBOX",
+):
+    """List attachments for a specific IMAP message id.
+    Returns list of {index, filename, content_type, size}.
+    """
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    try:
+        imap.login(email_account, email_password)
+        status, _ = imap.select(folder)
+        if status != "OK":
+            raise RuntimeError(f"Cannot select folder {folder}")
+        # Fetch full RFC822 then walk parts
+        status, msg_data = imap.fetch(message_id.encode("ascii"), "(RFC822)")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            return []
+        raw = msg_data[0][1]
+        msg = email.message_from_bytes(raw)
+        out = []
+        idx = 0
+        for part in msg.walk():
+            disp = str(part.get("Content-Disposition") or "").lower()
+            filename = part.get_filename()
+            if ("attachment" in disp) or (filename is not None):
+                ctype = (part.get_content_type() or "").lower()
+                data = part.get_payload(decode=True) or b""
+                size = len(data)
+                out.append({
+                    "index": idx,
+                    "filename": _decode_mime_words(filename or ""),
+                    "content_type": ctype,
+                    "size": size,
+                })
+                idx += 1
+        return out
+    finally:
+        try:
+            imap.close()
+        except Exception:
+            pass
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
+def fetch_attachment_bytes(
+    email_account: str,
+    email_password: str,
+    message_id: str,
+    index: int,
+    folder: str = "INBOX",
+):
+    """Fetch the bytes for an attachment by index from a given message id.
+    Returns (bytes, content_type, filename).
+    """
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    try:
+        imap.login(email_account, email_password)
+        status, _ = imap.select(folder)
+        if status != "OK":
+            raise RuntimeError(f"Cannot select folder {folder}")
+        status, msg_data = imap.fetch(message_id.encode("ascii"), "(RFC822)")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            raise RuntimeError("Message not found")
+        raw = msg_data[0][1]
+        msg = email.message_from_bytes(raw)
+        idx = 0
+        for part in msg.walk():
+            disp = str(part.get("Content-Disposition") or "").lower()
+            filename = part.get_filename()
+            if ("attachment" in disp) or (filename is not None):
+                if idx == index:
+                    data = part.get_payload(decode=True) or b""
+                    ctype = (part.get_content_type() or "application/octet-stream").lower()
+                    name = _decode_mime_words(filename or "attachment")
+                    return data, ctype, name
+                idx += 1
+        raise RuntimeError("Attachment index not found")
+    finally:
+        try:
+            imap.close()
+        except Exception:
+            pass
+        try:
+            imap.logout()
+        except Exception:
+            pass

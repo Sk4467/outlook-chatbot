@@ -18,7 +18,13 @@ import chromadb
 from chromadb.config import Settings
 
 import google.generativeai as genai
-
+# Gmail IMAP support
+from gmail_imap import (
+    fetch_emails as gmail_fetch_emails,
+    list_attachments as gmail_list_attachments,
+    fetch_attachment_bytes as gmail_fetch_attachment_bytes,
+)
+from rag.api import router as rag_router
 # =========================
 
 # Setup (runtime only)
@@ -46,9 +52,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Gmail IMAP support
-from gmail_imap import fetch_emails as gmail_fetch_emails
+app.include_router(rag_router, prefix="/rag")
 
 # =========================
 
@@ -337,3 +341,31 @@ def gmail_messages_all(n: int = Query(10, description="Last N emails")):
         else:
             out[str(slot)] = {"error": f"Missing GMAIL_USER{slot}/GMAIL_PASS{slot}"}
     return out
+
+
+@app.get("/gmail/message/{imap_id}/attachments")
+def gmail_message_attachments(imap_id: str, user: int = Query(1)):
+    if user not in (1, 2):
+        return {"value": []}
+    email_account = os.getenv(f"GMAIL_USER{user}", "")
+    email_password = os.getenv(f"GMAIL_PASS{user}", "")
+    if not email_account or not email_password:
+        return {"error": f"Missing GMAIL_USER{user}/GMAIL_PASS{user}"}
+    items = gmail_list_attachments(email_account, email_password, imap_id)
+    for it in items:
+        it["download_url"] = f"/gmail/message/{imap_id}/attachments/{it['index']}/download?user={user}"
+    return {"value": items}
+
+
+@app.get("/gmail/message/{imap_id}/attachments/{index}/download")
+def gmail_download_attachment(imap_id: str, index: int, user: int = Query(1)):
+    if user not in (1, 2):
+        return {"error": "invalid user"}
+    email_account = os.getenv(f"GMAIL_USER{user}", "")
+    email_password = os.getenv(f"GMAIL_PASS{user}", "")
+    if not email_account or not email_password:
+        return {"error": f"Missing GMAIL_USER{user}/GMAIL_PASS{user}"}
+    data, ctype, name = gmail_fetch_attachment_bytes(email_account, email_password, imap_id, index)
+    headers = {"Content-Disposition": f"attachment; filename={name}"}
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(iter([data]), media_type=ctype or "application/octet-stream", headers=headers)

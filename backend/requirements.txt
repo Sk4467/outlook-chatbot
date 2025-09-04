@@ -11,3 +11,4 @@ pyyaml
 msal
 requests
 beautifulsoup4
+httpx
