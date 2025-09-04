@@ -3,10 +3,12 @@ import io
 import hashlib
 from datetime import datetime
 from typing import List, Optional
-
-from fastapi import FastAPI, UploadFile, File, Form
+import fitz  # PyMuPDF
+from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from openpyxl import load_workbook
+
 
 import chromadb
 from chromadb.config import Settings
@@ -41,6 +43,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Gmail IMAP support
+from .gmail_imap import fetch_emails as gmail_fetch_emails
 
 # =========================
 
@@ -81,7 +86,7 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     return embeddings
 
 def parse_pdf_bytes(pdf_bytes: bytes) -> List[dict]:
-    import fitz  # PyMuPDF
+    
     docs = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page_num in range(len(doc)):
@@ -95,7 +100,7 @@ def parse_pdf_bytes(pdf_bytes: bytes) -> List[dict]:
     return docs
 
 def parse_xlsx_bytes(xlsx_bytes: bytes) -> List[dict]:
-    from openpyxl import load_workbook
+    
     wb = load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
     docs = []
     for sheet in wb.worksheets:
@@ -274,3 +279,54 @@ async def chat(req: ChatRequest):
     prompt = build_prompt(req.query, contexts)
     answer = gemini_answer(prompt)
     return {"answer": answer, "sources": sources}
+
+
+# =========================
+# Gmail IMAP Endpoints (runtime only)
+# =========================
+
+@app.get("/gmail/messages")
+def gmail_messages(
+    user: int = Query(1, description="User slot: 1 or 2"),
+    n: int = Query(10, description="Last N emails"),
+):
+    """
+    Reads emails for one of two configured users.
+    Configure environment variables:
+      - GMAIL_USER1, GMAIL_PASS1
+      - GMAIL_USER2, GMAIL_PASS2
+    """
+    if user not in (1, 2):
+        return {"value": []}
+    email_account = os.getenv(f"GMAIL_USER{user}", "")
+    email_password = os.getenv(f"GMAIL_PASS{user}", "")
+    if not email_account or not email_password:
+        return {"error": f"Missing GMAIL_USER{user}/GMAIL_PASS{user} env vars"}
+    msgs = gmail_fetch_emails(email_account, email_password, n=n)
+    return {"value": msgs}
+
+
+@app.get("/gmail/users")
+def gmail_users():
+    users = []
+    for slot in (1, 2):
+        email_user = os.getenv(f"GMAIL_USER{slot}")
+        users.append({
+            "slot": slot,
+            "email": email_user or None,
+            "configured": bool(email_user),
+        })
+    return {"users": users}
+
+
+@app.get("/gmail/messages/all")
+def gmail_messages_all(n: int = Query(10, description="Last N emails")):
+    out = {}
+    for slot in (1, 2):
+        email_account = os.getenv(f"GMAIL_USER{slot}", "")
+        email_password = os.getenv(f"GMAIL_PASS{slot}", "")
+        if email_account and email_password:
+            out[str(slot)] = gmail_fetch_emails(email_account, email_password, n=n)
+        else:
+            out[str(slot)] = {"error": f"Missing GMAIL_USER{slot}/GMAIL_PASS{slot}"}
+    return out

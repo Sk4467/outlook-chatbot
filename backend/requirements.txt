@@ -4,3 +4,9 @@ chromadb
 google-generativeai
 pymupdf
 openpyxl
+beautifulsoup4
+chardet
+python-docx
+msal
+requests
+beautifulsoup4
