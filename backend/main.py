@@ -1,4 +1,8 @@
 import os
+from config_loader import load_config_to_env as _load_cfg
+
+# Load YAML config into env before reading keys
+_cfg = _load_cfg()
 import io
 import hashlib
 from datetime import datetime
@@ -22,9 +26,8 @@ import google.generativeai as genai
 # =========================
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-if not GOOGLE_API_KEY:
-    raise RuntimeError("Set GOOGLE_API_KEY environment variable.")
-genai.configure(api_key=GOOGLE_API_KEY)
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
 
 # Chroma in-memory client (no persistence)
 
@@ -38,14 +41,14 @@ seen_hashes = set()
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # dev only
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),  # dev only
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Gmail IMAP support
-from .gmail_imap import fetch_emails as gmail_fetch_emails
+from gmail_imap import fetch_emails as gmail_fetch_emails
 
 # =========================
 
@@ -165,6 +168,8 @@ async def ingest(
     bodyText: str = Form(""),
     attachments: List[UploadFile] = File(None),
 ):
+    if not GOOGLE_API_KEY:
+        return {"error": "GOOGLE_API_KEY not configured. Set in backend/config.yaml under gemini.api_key."}
     email_id = stable_email_id(emailSubject, emailFrom, receivedAt)
 
     docs_texts = []
@@ -258,6 +263,8 @@ async def ingest(
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    if not GOOGLE_API_KEY:
+        return {"error": "GOOGLE_API_KEY not configured. Set in backend/config.yaml under gemini.api_key."}
     if req.k is None or req.k <= 0:
         req.k = 6
     q_emb = embed_text(req.query)

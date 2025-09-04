@@ -1,0 +1,18 @@
+gemini:
+  # Your Google AI API key for Gemini. Required if you will use /ingest and /chat endpoints.
+  api_key: "AIzaSyAXN0SIDGhwVtFJu8q2h9C0AUiaDDXNZR8"
+
+gmail:
+  users:
+    # User slot 1
+    - email: ""
+      # App password generated in Google Account (2FA must be enabled)
+      app_password: ""
+    # User slot 2 (optional)
+    - email: ""
+      app_password: ""
+
+server:
+  # Allowed origins for the frontend dev server
+  cors_origins:
+    - "http://localhost:5173"
