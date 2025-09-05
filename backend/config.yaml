@@ -1,19 +1,19 @@
 gemini:
   # Your Google AI API key for Gemini. Required if you will use /ingest and /chat endpoints.
-  api_key: "AIzaSyCBbq0GpHmC9kb-BmA22VcY7sMmqmc0IhM"
+  api_key: ""
 
 pandas-agi:
-  api_key: "pk_dccb7d5f545193ba487fc93214d94b13be5bbdc4b77518fb53c2c7d21714382c"
+  api_key: ""
   
 gmail:
   users:
     # User slot 1
-    - email: "ashutosh8ap@gmail.com"
+    - email: ""
       # App password generated in Google Account (2FA must be enabled)
-      app_password: "fmza xjwr ohxm vyip"
+      app_password: ""
     # User slot 2 (optional)
-    - email: "shahidnitor@gmail.com"
-      app_password: "qvvr zzlu ahap eqod"
+    - email: ""
+      app_password: ""
 
 server:
   # Allowed origins for the frontend dev server
