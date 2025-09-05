@@ -1,0 +1,673 @@
+sfrom rom fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import imaplib, email, os, tempfile
+from email.header import decode_header
+import google.generativeai as genai
+import openpyxl
+import magic
+import pandas as pd
+from pandasai import PandasAISc 
+from pandasai.llm.base import LLM
+from PyPDF2 import PdfReader
+from docx import Document
+from typing import Optional
+from fastapi.responses import Response, FileResponse
+import os
+
+# ---------- CONFIG ----------
+IMAP_SERVER = "imap.gmail.com"
+ACCOUNTS = [
+
+]
+n = 10
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env into environment
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+print("Loaded key:", GOOGLE_API_KEY is not None)
+
+# ---------- Gemini Connector ----------
+class GeminiLLM(LLM):
+    def __init__(self, api_key: str, model: str = "gemini-1.5-pro"):
+        super().__init__()
+        self.api_key = api_key
+        self.model = model
+        genai.configure(api_key=api_key)
+
+    def call(self, prompt: str, **kwargs) -> str:
+        response = genai.GenerativeModel(self.model).generate_content(prompt)
+        return response.text if response and response.text else ""
+
+    @property
+    def type(self) -> str:
+        return "google-gemini"
+
+llm = GeminiLLM(api_key=GOOGLE_API_KEY)
+pandas_ai = PandasAI(llm, conversational=False)
+
+# ---------- FASTAPI ----------
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------- GLOBALS ----------
+email_texts_by_account = {}   # {account_email: [emails]}
+excel_dataframes = {}         # {(account_email, filename): dataframe}
+fetched_files = {}            # {account_email: [filenames]}
+
+# ---------- MODELS ----------
+class AskRequest(BaseModel):
+    question: str
+    account: Optional[str] = None
+    files: Optional[list[str]] = None
+
+from fastapi.responses import FileResponse
+
+
+@app.get("/favicon.ico")
+def favicon():
+    path = "static/favicon.ico"
+    if os.path.exists(path):
+        return FileResponse(path)
+    else:
+        # Return an empty 1x1 icon so browser doesn't throw 500
+        return Response(content=b"", media_type="image/x-icon")
+
+
+# ---------- PARSERS ----------
+def parse_pdf(path):
+    try:
+        reader = PdfReader(path)
+        return "\n".join([page.extract_text() or "" for page in reader.pages])
+    except:
+        return "[Could not parse PDF]"
+
+def parse_docx(path):
+    try:
+        doc = Document(path)
+        return "\n".join([p.text for p in doc.paragraphs])
+    except:
+        return "[Could not parse Word doc]"
+
+# Global storage (already exists in your code)
+excel_dataframes = {}
+
+def parse_excel(path, filename, account_email):
+    try:
+        mime = magic.from_file(path, mime=True)
+        print(f"[File type detected] {filename}: {mime}")
+
+        def clean_df(df: pd.DataFrame) -> pd.DataFrame:
+            df = df.dropna(how="all")  # remove empty rows
+            df = df.loc[:, ~df.columns.duplicated()]  # deduplicate columns
+            df.columns = [str(c).strip() for c in df.columns]  # normalize headers
+            df = df.reset_index(drop=True)
+            return df
+
+        preview_text = None
+        ref_key = None
+
+        # --- Excel ---
+        if mime in [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        ]:
+            try:
+                wb = openpyxl.load_workbook(path, data_only=True)
+                dfs = []
+                for sheet in wb.sheetnames:
+                    ws = wb[sheet]
+                    rows = list(ws.iter_rows(values_only=True))
+                    if not rows:
+                        continue
+                    df = pd.DataFrame(rows[1:], columns=rows[0])
+                    df = clean_df(df)
+                    df["source_account"] = account_email
+                    dfs.append(df)
+                    excel_dataframes[(account_email, f"{filename}:{sheet}")] = df
+                    print(f"[Loaded Excel] {filename}:{sheet} → {df.shape[0]} rows, {df.shape[1]} cols")
+
+                if dfs:
+                    combined = pd.concat(dfs, ignore_index=True)
+                    ref_key = (account_email, filename)
+                    excel_dataframes[ref_key] = combined
+                    fetched_files.setdefault(account_email, []).append(filename)
+                    preview_text = combined.head(15).to_string()
+                else:
+                    preview_text = "[Empty Excel file]"
+
+            except Exception as e1:
+                print(f"[Excel parse error with openpyxl] {filename}: {e1}")
+                try:
+                    df = pd.read_excel(path, engine="openpyxl")
+                    df = clean_df(df)
+                    df["source_account"] = account_email
+                    ref_key = (account_email, filename)
+                    excel_dataframes[ref_key] = df
+                    preview_text = df.head(15).to_string()
+                    print(f"[Loaded Excel via pandas] {filename} → {df.shape[0]} rows, {df.shape[1]} cols")
+                except Exception as e2:
+                    print(f"[Pandas Excel parse error] {filename}: {e2}")
+
+        # --- CSV ---
+        elif mime in ["text/csv", "text/plain", "application/octet-stream"]:
+            for enc in ["utf-8", "latin-1"]:
+                try:
+                    df = pd.read_csv(path, encoding=enc)
+                    df = clean_df(df)
+                    df["source_account"] = account_email
+                    ref_key = (account_email, filename)
+                    excel_dataframes[ref_key] = df
+                    fetched_files.setdefault(account_email, []).append(filename)
+                    preview_text = df.head(15).to_string()
+                    print(f"[Loaded CSV] {filename} ({enc}) → {df.shape[0]} rows, {df.shape[1]} cols")
+                    break
+                except Exception as e3:
+                    print(f"[CSV parse error] {filename} with {enc}: {e3}")
+
+        else:
+            print(f"[Unsupported format] {filename} (MIME={mime})")
+            preview_text = "[Unsupported file format]"
+
+        if preview_text is None:
+            preview_text = "[Could not parse file]"
+
+        return {"preview": preview_text, "ref_key": ref_key}
+
+    except Exception as e:
+        print(f"[Critical parse error] {filename}: {e}")
+        return {"preview": "[Critical error parsing file]", "ref_key": None}
+
+
+# --- Helper to get full dataframe ---
+def get_full_dataframe(ref_key: tuple) -> pd.DataFrame | None:
+    """
+    Retrieve full DataFrame from excel_dataframes
+    using the reference key returned by parse_excel.
+    """
+    return excel_dataframes.get(ref_key)
+
+# ---------- EMAIL FETCH ----------
+def fetch_emails(account, n):
+    mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+    mail.login(account["email"], account["password"])
+    mail.select("inbox")
+
+    status, data = mail.search(None, "ALL")
+    if status != "OK":
+        print(f"❌ Search failed for {account['email']}")
+        return []
+
+    email_ids = data[0].split()
+    latest_ids = email_ids if n is None else email_ids[-n:]
+
+    messages = []
+    for e_id in latest_ids:
+        status, msg_data = mail.fetch(e_id, "(RFC822)")
+        msg = email.message_from_bytes(msg_data[0][1])
+
+        # Subject
+        subject, encoding = decode_header(msg["Subject"])[0]
+        if isinstance(subject, bytes):
+            subject = subject.decode(encoding or "utf-8", errors="ignore")
+
+        from_ = msg.get("From", "Unknown sender")
+        to_ = msg.get("To", "")
+        cc_ = msg.get("Cc", "")
+        date_ = msg.get("Date", "")
+
+        body = ""
+        attachments = []
+        attachments_text = ""
+
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                disp = str(part.get("Content-Disposition"))
+
+                if content_type == "text/plain" and "attachment" not in disp:
+                    try:
+                        body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                    except Exception:
+                        body = "[Error decoding body]"
+
+                elif "attachment" in disp:
+                    filename = part.get_filename()
+                    if filename:
+                        attachments.append(filename)
+                        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                            tmp.write(part.get_payload(decode=True))
+                            tmp_path = tmp.name
+
+                        if filename.endswith(".pdf"):
+                            attachments_text += f"\n[Attachment: {filename}]\n{parse_pdf(tmp_path)}"
+                        elif filename.endswith(".docx"):
+                            attachments_text += f"\n[Attachment: {filename}]\n{parse_docx(tmp_path)}"
+                        elif filename.endswith((".xlsx", ".xlsm", ".csv")):
+                            attachments_text += f"\n[Attachment: {filename}]\n{parse_excel(tmp_path, filename, account['email'])}"
+
+                        os.remove(tmp_path)
+        else:
+            try:
+                body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+            except Exception:
+                body = "[Error decoding body]"
+
+        messages.append({
+            "from": from_,
+            "to": to_,
+            "cc": cc_,
+            "date": date_,
+            "subject": subject,
+            "body": body,
+            "attachments": attachments,
+            "attachments_text": attachments_text,
+        })
+
+    mail.logout()
+    return messages
+
+# ---------- DEBUG EMAILS ENDPOINT ----------
+@app.get("/debug-emails")
+def debug_emails(limit: int = 10, account: Optional[str] = None):
+    """Quick check if IMAP login & email fetching works."""
+    try:
+        results = []
+        accounts_to_check = ACCOUNTS if not account else [a for a in ACCOUNTS if a["email"] == account]
+
+        for acct in accounts_to_check:
+            try:
+                mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+                mail.login(acct["email"], acct["password"])
+                mail.select("inbox")
+
+                status, data = mail.search(None, "ALL")
+                if status != "OK":
+                    results.append({acct["email"]: "❌ Search failed"})
+                    continue
+
+                email_ids = data[0].split()
+                latest_ids = email_ids[-limit:]
+
+                acct_results = []
+                for e_id in latest_ids:
+                    status, msg_data = mail.fetch(e_id, "(RFC822)")
+                    msg = email.message_from_bytes(msg_data[0][1])
+
+                    # Subject
+                    subject, encoding = decode_header(msg["Subject"])[0]
+                    if isinstance(subject, bytes):
+                        subject = subject.decode(encoding or "utf-8", errors="ignore")
+
+                    # From
+                    from_ = msg.get("From", "Unknown sender")
+
+                    # Attachment names only
+                    attachments = []
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            disp = str(part.get("Content-Disposition"))
+                            if "attachment" in disp:
+                                filename = part.get_filename()
+                                if filename:
+                                    attachments.append(filename)
+
+                    acct_results.append({
+                        "from": from_,
+                        "subject": subject,
+                        "attachments": attachments
+                    })
+
+                results.append({acct["email"]: acct_results})
+                mail.logout()
+
+            except Exception as e:
+                results.append({acct["email"]: f"❌ Login failed: {str(e)}"})
+
+        return JSONResponse(content={"emails": results})
+
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)})
+
+EXPORT_DIR = "exports"
+os.makedirs(EXPORT_DIR, exist_ok=True)
+
+def export_dataframe(ref_key: tuple, fmt: str = "csv") -> str | None:
+    """
+    Export parsed dataframe to CSV or Excel.
+    Returns the path of the saved file or None if not found.
+    """
+    df = excel_dataframes.get(ref_key)
+    if df is None:
+        print(f"[Export failed] No dataframe for {ref_key}")
+        return None
+
+    base = f"{ref_key[0].replace('@','_')}_{ref_key[1].replace(':','_')}"
+    path = os.path.join(EXPORT_DIR, f"{base}.{fmt}")
+
+    try:
+        if fmt == "csv":
+            df.to_csv(path, index=False)
+        elif fmt == "xlsx":
+            df.to_excel(path, index=False, engine="openpyxl")
+        else:
+            print(f"[Unsupported export format] {fmt}")
+            return None
+        print(f"[Exported] {path}")
+        return path
+    except Exception as e:
+        print(f"[Export error] {ref_key}: {e}")
+        return None
+
+# --- API Endpoints ---
+@app.get("/export-data")
+def export_data(account: str, filename: str, fmt: str = "csv"):
+    """
+    Download full cleaned dataframe as CSV/Excel.
+    account: email id of source account
+    filename: the file name key (exact match from parser)
+    fmt: 'csv' or 'xlsx'
+    """
+    ref_key = (account, filename)
+    path = export_dataframe(ref_key, fmt)
+    if not path:
+        return JSONResponse(content={"error": f"No data for {ref_key}"}, status_code=404)
+    return FileResponse(path, media_type="application/octet-stream", filename=os.path.basename(path))
+
+# ---------- STARTUP ----------
+email_texts_by_account = {}
+
+@app.on_event("startup")
+async def startup_event():
+    global email_texts_by_account
+    email_texts_by_account = {}
+
+    for acct in ACCOUNTS:
+        try:
+            print(f"🔌 Fetching emails for {acct['email']}")
+            emails = fetch_emails(acct, n)   # <-- use existing function
+            email_texts_by_account[acct["email"]] = emails
+            print(f"📥 {acct['email']} → {len(emails)} emails loaded")
+        except Exception as e:
+            print(f"❌ Failed for {acct['email']}: {e}")
+            email_texts_by_account[acct["email"]] = []
+            
+def try_parse_attachment(file_bytes, filename):
+    try:
+        if filename.endswith(".xlsx"):
+            df = pd.read_excel(BytesIO(file_bytes))
+        elif filename.endswith(".csv"):
+            df = pd.read_csv(BytesIO(file_bytes))
+        else:
+            return ""
+        return df.head(10).to_string()  # preview of data
+    except Exception as e:
+        return f"Could not parse {filename}: {e}"
+
+# ---------- STATUS ENDPOINT ----------
+@app.get("/status")
+def status():
+    return JSONResponse(content={
+        "accounts": [acct["email"] for acct in ACCOUNTS],
+        "account_files": fetched_files
+    })
+	
+@app.get("/reload")
+def reload_emails():
+    global email_texts_by_account
+    email_texts_by_account = {}
+
+    for acct in ACCOUNTS:
+        try:
+            emails = fetch_emails(acct, n)
+            email_texts_by_account[acct["email"]] = emails
+        except Exception as e:
+            email_texts_by_account[acct["email"]] = []
+
+    return {"status": "ok", "accounts": {k: len(v) for k, v in email_texts_by_account.items()}}
+
+# ---------- CLEAR ENDPOINT ----------
+@app.post("/clear")
+def clear():
+    global email_texts_by_account, excel_dataframes, fetched_files
+    email_texts_by_account.clear()
+    excel_dataframes.clear()
+    fetched_files.clear()
+    return {"status": "cleared"}
+
+@app.post("/ask")
+def ask(req: AskRequest):
+    global email_texts_by_account, excel_dataframes
+
+    debug_info = []
+
+    # --- Step 1: Filter relevant emails ---
+    relevant_emails = []
+    if req.account:
+        accounts_to_search = [acct for acct in ACCOUNTS if acct["email"] == req.account]
+    else:
+        accounts_to_search = ACCOUNTS
+
+    for acct in accounts_to_search:
+        acct_emails = email_texts_by_account.get(acct["email"], [])
+        debug_info.append(f"{acct['email']}: {len(acct_emails)} emails loaded")
+
+        # Filter by filenames if requested
+        if req.files:
+            before = len(acct_emails)
+            acct_emails = [e for e in acct_emails if any(f in e["attachments"] for f in req.files)]
+            after = len(acct_emails)
+            debug_info.append(f"   - Filtered by files: {before} → {after}")
+
+        relevant_emails.extend(acct_emails)
+
+    # Fallback: last 50 emails
+    if not relevant_emails:
+        all_emails = [e for emails in email_texts_by_account.values() for e in emails]
+        relevant_emails = all_emails[-50:]
+        debug_info.append(f"Fallback used: last {len(relevant_emails)} emails")
+
+    if not relevant_emails:
+        return {
+            "answer": "⚠️ No emails were loaded at all.",
+            "email_count": 0,
+            "debug": debug_info
+        }
+
+    # --- Step 2: Check for structured question keywords ---
+    structured_keywords = ["salesperson", "region", "customer", "product", "quantity"]
+    if any(word in req.question.lower() for word in structured_keywords):
+        structured_data_found = False
+        structured_response = []
+
+        for (fname, df) in excel_dataframes.items():
+            for col in df.columns:
+                if any(word in col.lower() for word in structured_keywords):
+                    structured_data_found = True
+                    unique_vals = df[col].dropna().unique().tolist()
+                    structured_response.append(
+                        f"{fname} - {col} ({len(unique_vals)} unique values): {', '.join(map(str, unique_vals))}"
+                    )
+
+        if structured_data_found:
+            # Optional: use PandasAI for more advanced queries
+            try:
+                for df_name, df in excel_dataframes.items():
+                    # Example: ask PandasAI to answer your question on each dataframe
+                    answer = pandas_ai.run(df, req.question)
+                    structured_response.append(f"{df_name} → {answer}")
+            except Exception as e:
+                debug_info.append(f"PandasAI error: {e}")
+
+            return {
+                "answer": "\n".join(structured_response),
+                "email_count": len(relevant_emails),
+                "debug": debug_info
+            }
+
+    # --- Step 3: Fallback to LLM summarization (emails + attachments) ---
+    formatted = []
+    for e in relevant_emails[:20]:  # limit for context
+        base = (
+            f"From: {e['from']}\nTo: {e['to']}\nCc: {e['cc']}\nDate: {e['date']}\n"
+            f"Subject: {e['subject']}\n\n{e['body']}"
+        )
+        if e["attachments"]:
+            base += f"\n\nAttachments: {', '.join(e['attachments'])}\n{e['attachments_text']}"
+        formatted.append(base)
+
+    joined = "\n\n---\n\n".join(formatted)
+
+    prompt = f"""
+You are an email analysis assistant.
+User question: {req.question}
+
+Here are some emails:
+{joined}
+
+Instructions:
+- First, summarize or answer concisely.
+- If the question is about attachments, use attachments_text.
+- If no attachments exist, use body, subject, from/to/cc/date.
+"""
+    ai_answer = llm.call(prompt)  # your existing LLM function
+
+    return {
+        "answer": ai_answer,
+        "email_count": len(relevant_emails),
+        "debug": debug_info
+    }
+
+@app.get("/.well-known/appspecific/com.chrome.devtools.json")
+def chrome_probe():
+    return JSONResponse(content={})
+
+# ---------- FRONTEND ----------
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Email Chatbot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-start min-h-screen p-6">
+<div class="bg-white shadow-xl rounded-2xl w-full max-w-3xl p-6 flex flex-col">
+<h2 class="text-3xl font-bold mb-4 text-center text-blue-600">📧 Email & Data Chatbot</h2>
+
+<div class="flex gap-3 mb-4">
+<select id="account-select" class="border rounded px-3 py-2 w-1/2" onchange="loadFiles()">
+<option value="">All accounts</option>
+</select>
+<select id="file-select" class="border rounded px-3 py-2 w-1/2" multiple size="5">
+<option value="">All files</option>
+</select>
+</div>
+
+<div id="messages" class="flex-1 overflow-y-auto border rounded-lg p-4 mb-4 h-96 bg-gray-50"></div>
+
+<div class="flex gap-2 mb-3">
+<input id="question" type="text" placeholder="Ask about your emails or data..." 
+class="flex-1 border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+<button onclick="sendMessage()" 
+class="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition">Send</button>
+<button onclick="clearConversation()" 
+class="bg-red-500 text-white px-6 py-2 rounded-lg hover:bg-red-600 transition">Clear</button>
+</div>
+</div>
+
+<script>
+let accountFilesMap = {};
+
+// Load accounts & files dynamically
+async function loadStatus() {
+    const res = await fetch("/status");
+    const data = await res.json();
+
+    const accountSelect = document.getElementById("account-select");
+    accountSelect.innerHTML = '<option value="">All accounts</option>' +
+        data.accounts.map(a => `<option value="${a}">${a}</option>`).join('');
+
+    accountFilesMap = data.account_files || {};
+    loadFiles();
+}
+
+function loadFiles() {
+    const selectedAccount = document.getElementById("account-select").value;
+    const fileSelect = document.getElementById("file-select");
+    fileSelect.innerHTML = "";
+
+    if (selectedAccount && accountFilesMap[selectedAccount]) {
+        accountFilesMap[selectedAccount].forEach(f => {
+            fileSelect.innerHTML += `<option value="${f}">${f}</option>`;
+        });
+    } else {
+        let allFiles = new Set();
+        Object.values(accountFilesMap).forEach(list => list.forEach(f => allFiles.add(f)));
+        allFiles.forEach(f => {
+            fileSelect.innerHTML += `<option value="${f}">${f}</option>`;
+        });
+    }
+}
+
+async function sendMessage() {
+    const questionInput = document.getElementById("question");
+    const question = questionInput.value.trim();
+    if (!question) return;
+
+    const selectedAccount = document.getElementById("account-select").value;
+    const selectedFiles = Array.from(document.getElementById("file-select").selectedOptions).map(o => o.value);
+
+    const messagesDiv = document.getElementById("messages");
+    messagesDiv.innerHTML += `
+        <div class='my-2 flex justify-end'>
+            <div class='bg-blue-100 text-blue-800 px-4 py-2 rounded-lg max-w-xs break-words'>
+                <strong>You:</strong> ${question}
+            </div>
+        </div>`;
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+    try {
+        const res = await fetch("/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question, account: selectedAccount || null, files: selectedFiles || null })
+        });
+
+        const data = await res.json();
+        const answer = data.answer || "No response from server";
+
+        messagesDiv.innerHTML += `
+            <div class='my-2 flex justify-start'>
+                <div class='bg-green-100 text-green-800 px-4 py-2 rounded-lg max-w-xs break-words'>
+                    <strong>Bot:</strong> ${answer.replace(/\\n/g, "<br>")}
+                </div>
+            </div>`;
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        questionInput.value = "";
+
+    } catch (err) {
+        messagesDiv.innerHTML += `<div class='my-2 text-red-600'>Error contacting server: ${err}</div>`;
+    }
+}
+
+async function clearConversation() {
+    await fetch("/clear", { method: "POST" });
+    document.getElementById("messages").innerHTML = "";
+    document.getElementById("file-select").innerHTML = "";
+    accountFilesMap = {};
+    loadStatus();
+}
+
+loadStatus();
+</script>
+</body>
+</html>
+"""

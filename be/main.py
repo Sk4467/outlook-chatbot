@@ -411,7 +411,7 @@ def bulk_fetch_and_ingest(req: BulkIngestRequest):
         from rag.api import IngestMailBody, IngestAttachment
         
         for i, email in enumerate(emails):
-            email_id = email.get("imap_id", f"email_{i}")
+            email_id = email.get("id", f"email_{i}")
             subject = email.get("subject", "No Subject")
             print(f"[BULK INGEST] Processing email {i+1}/{len(emails)}: {subject[:50]}...")
             
@@ -424,18 +424,18 @@ def bulk_fetch_and_ingest(req: BulkIngestRequest):
             }
             
             # Step 2: Ingest mail body if requested
-            if req.ingest_mail_bodies and email.get("body"):
+            if req.ingest_mail_bodies and email.get("body_text"):
                 try:
                     mail_body_req = IngestMailBody(
                         messageId=email_id,
                         subject=subject,
-                        sender=email.get("sender", ""),
-                        body=email.get("body", ""),
-                        date=email.get("date", "")
+                        sender=email.get("from", ""),
+                        bodyText=email.get("body_text", ""),
+                        receivedAt=email.get("date", "")
                     )
                     # Import and call the RAG ingest function
-                    from rag.api import ingest_mail_body
-                    ingest_result = ingest_mail_body(mail_body_req)
+                    from rag.api import ingest_mail
+                    ingest_result = ingest_mail(mail_body_req)
                     if ingest_result.get("chunks", 0) > 0:
                         email_result["mail_body_ingested"] = True
                         results["mail_bodies_ingested"] += 1
