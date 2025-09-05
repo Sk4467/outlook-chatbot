@@ -1,4 +1,5 @@
 config.yaml
+backend
 .venv/
 node_modules/
 .env
