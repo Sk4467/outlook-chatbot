@@ -17,6 +17,7 @@ def load_config_to_env() -> Dict[str, Any]:
     Priority: CONFIG_PATH env var -> backend/config.yaml -> ./config.yaml
     Sets:
       - GOOGLE_API_KEY
+      - PANDAS_AGI_API_KEY
       - GMAIL_USER1/GMAIL_PASS1, GMAIL_USER2/GMAIL_PASS2
       - CORS_ORIGINS (comma-separated) if provided
     Returns the parsed config dict for optional direct use.
@@ -38,6 +39,15 @@ def load_config_to_env() -> Dict[str, Any]:
     )
     if gemini_key:
         os.environ["GOOGLE_API_KEY"] = str(gemini_key)
+
+    # PandaAGI
+    pandaagi_key = (
+        cfg.get("pandas-agi", {}).get("api_key")
+        if isinstance(cfg.get("pandas-agi"), dict)
+        else None
+    )
+    if pandaagi_key:
+        os.environ["PANDAS_AGI_API_KEY"] = str(pandaagi_key)
 
     # Gmail users
     gmail = cfg.get("gmail", {}) if isinstance(cfg.get("gmail"), dict) else {}

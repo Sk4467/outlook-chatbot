@@ -12,3 +12,9 @@ msal
 requests
 beautifulsoup4
 httpx
+pandasai[excel]
+pandas
+numpy
+pdfplumber
+langchain-text-splitters
+langchain-core

@@ -25,9 +25,81 @@ def parse_pdf_bytes(pdf_bytes: bytes) -> List[Dict[str, Any]]:
     for i in range(len(doc)):
         page = doc[i]
         text = page.get_text("text") or ""
-        out.append({"text": text, "page": i + 1})
+        
+        # Enhanced text extraction with structure preservation
+        # Try to get more structured text if available
+        try:
+            # Get text with layout information
+            blocks = page.get_text("dict")
+            structured_text = _extract_structured_text(blocks)
+            if structured_text and len(structured_text) > len(text):
+                text = structured_text
+        except:
+            # Fallback to simple text extraction
+            pass
+        
+        # Clean and normalize text
+        text = _clean_pdf_text(text)
+        
+        out.append({
+            "text": text, 
+            "page": i + 1,
+            "char_count": len(text),
+            "word_count": len(text.split())
+        })
     doc.close()
     return out
+
+def _extract_structured_text(blocks_dict: Dict[str, Any]) -> str:
+    """Extract text while preserving some structure from PDF blocks"""
+    text_parts = []
+    
+    if "blocks" in blocks_dict:
+        for block in blocks_dict["blocks"]:
+            if "lines" in block:
+                block_text = []
+                for line in block["lines"]:
+                    if "spans" in line:
+                        line_text = ""
+                        for span in line["spans"]:
+                            if "text" in span:
+                                line_text += span["text"]
+                        if line_text.strip():
+                            block_text.append(line_text.strip())
+                
+                if block_text:
+                    # Join lines within a block
+                    text_parts.append(" ".join(block_text))
+    
+    # Join blocks with double newlines to preserve paragraph structure
+    return "\n\n".join(text_parts)
+
+def _clean_pdf_text(text: str) -> str:
+    """Clean and normalize PDF text"""
+    import re
+    
+    # Remove excessive whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove page headers/footers patterns (common patterns)
+    text = re.sub(r'Page \d+ of \d+', '', text)
+    text = re.sub(r'^\d+\s*$', '', text, flags=re.MULTILINE)
+    
+    # Fix common PDF extraction issues
+    text = text.replace('\uf0b7', '•')  # Replace bullet point character
+    text = text.replace('\u2022', '•')  # Another bullet point
+    text = text.replace('\u2013', '-')  # En dash
+    text = text.replace('\u2014', '--')  # Em dash
+    text = text.replace('\u201c', '"')  # Left double quote
+    text = text.replace('\u201d', '"')  # Right double quote
+    text = text.replace('\u2018', "'")  # Left single quote
+    text = text.replace('\u2019', "'")  # Right single quote
+    
+    # Remove extra spaces and normalize
+    text = re.sub(r' +', ' ', text)
+    text = text.strip()
+    
+    return text
 
 def xlsx_summary_from_bytes(xlsx_bytes: bytes, sample_rows: int = 50) -> List[Dict[str, Any]]:
     """

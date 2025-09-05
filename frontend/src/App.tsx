@@ -198,15 +198,449 @@ export default function App() {
     }
   };
 
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      askRag();
+    }
+  };
+
   return (
-    <div style={{ fontFamily: "system-ui", padding: 16, display: "grid", gap: 12 }}>
-      <h2>Gmail IMAP Viewer</h2>
+    <div className="app">
+      <style jsx>{`
+        .app {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+          min-height: 100vh;
+          background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+          padding: 2rem;
+          box-sizing: border-box;
+        }
 
-      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-        <button onClick={loadUsers} disabled={loading}>Load Users</button>
+        .header {
+          max-width: 1400px;
+          margin: 0 auto 2rem;
+          text-align: center;
+        }
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label htmlFor="fetchCount"><strong>Fetch last:</strong></label>
+        .header h1 {
+          margin: 0 0 0.5rem;
+          font-size: 2.5rem;
+          font-weight: 700;
+          color: #1e293b;
+          background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
+
+        .header p {
+          margin: 0;
+          color: #64748b;
+          font-size: 1.1rem;
+        }
+
+        .controls {
+          max-width: 1400px;
+          margin: 0 auto 2rem;
+          display: flex;
+          gap: 1rem;
+          align-items: center;
+          flex-wrap: wrap;
+          justify-content: center;
+          padding: 1.5rem;
+          background: white;
+          border-radius: 1rem;
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn {
+          padding: 0.75rem 1.5rem;
+          border: none;
+          border-radius: 0.5rem;
+          font-weight: 600;
+          cursor: pointer;
+          font-size: 0.9rem;
+        }
+
+        .btn-primary {
+          background: #3b82f6;
+          color: white;
+        }
+
+        .btn-secondary {
+          background: #f1f5f9;
+          color: #475569;
+          border: 1px solid #e2e8f0;
+        }
+
+        .btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .fetch-control {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          background: #f8fafc;
+          padding: 0.75rem 1rem;
+          border-radius: 0.5rem;
+          border: 1px solid #e2e8f0;
+        }
+
+        .fetch-control label {
+          font-weight: 600;
+          color: #374151;
+          font-size: 0.9rem;
+        }
+
+        .fetch-control input[type="range"] {
+          width: 100px;
+        }
+
+        .fetch-control span {
+          font-weight: 600;
+          color: #3b82f6;
+          min-width: 2rem;
+          text-align: center;
+        }
+
+        .error {
+          max-width: 1400px;
+          margin: 0 auto 1rem;
+          padding: 1rem;
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          border-radius: 0.5rem;
+          color: #dc2626;
+          font-weight: 500;
+        }
+
+        .users-grid {
+          max-width: 1400px;
+          margin: 0 auto 2rem;
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+          gap: 2rem;
+        }
+
+        .user-card {
+          background: white;
+          border-radius: 1rem;
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+          overflow: hidden;
+        }
+
+        .user-header {
+          padding: 1.5rem 1.5rem 1rem;
+          background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+          border-bottom: 1px solid #e2e8f0;
+        }
+
+        .user-title {
+          font-size: 1.1rem;
+          font-weight: 700;
+          color: #1e293b;
+          margin: 0;
+        }
+
+        .user-email {
+          color: #64748b;
+          font-size: 0.9rem;
+          margin: 0.25rem 0 0;
+        }
+
+        .user-content {
+          display: grid;
+          grid-template-columns: 1fr 1.5fr;
+          gap: 0;
+          min-height: 400px;
+        }
+
+        .messages-panel {
+          padding: 1.5rem;
+          border-right: 1px solid #e2e8f0;
+          background: #fafbfc;
+        }
+
+        .messages-title {
+          font-size: 1rem;
+          font-weight: 600;
+          color: #374151;
+          margin: 0 0 1rem;
+        }
+
+        .messages-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+          max-height: 300px;
+          overflow-y: auto;
+        }
+
+        .message-item {
+          margin-bottom: 0.5rem;
+        }
+
+        .message-btn {
+          width: 100%;
+          text-align: left;
+          padding: 0.75rem;
+          border: 1px solid #e2e8f0;
+          border-radius: 0.5rem;
+          background: white;
+          cursor: pointer;
+        }
+
+        .message-subject {
+          font-weight: 600;
+          color: #1e293b;
+          margin-bottom: 0.25rem;
+          display: block;
+        }
+
+        .message-meta {
+          font-size: 0.8rem;
+          color: #64748b;
+        }
+
+        .preview-panel {
+          padding: 1.5rem;
+        }
+
+        .preview-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 1rem;
+        }
+
+        .preview-title {
+          font-size: 1rem;
+          font-weight: 600;
+          color: #374151;
+          margin: 0;
+        }
+
+        .preview-toggle {
+          display: flex;
+          gap: 0.5rem;
+        }
+
+        .preview-content {
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          max-height: 300px;
+          overflow-y: auto;
+          padding: 1rem;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 0.5rem;
+          font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+          font-size: 0.9rem;
+          line-height: 1.5;
+          margin-bottom: 1rem;
+        }
+
+        .preview-empty {
+          color: #64748b;
+          font-style: italic;
+          text-align: center;
+          padding: 2rem;
+        }
+
+        .actions {
+          display: flex;
+          gap: 0.75rem;
+          align-items: center;
+          flex-wrap: wrap;
+          margin-bottom: 1rem;
+        }
+
+        .status {
+          font-size: 0.85rem;
+          color: #059669;
+          font-weight: 500;
+        }
+
+        .attachments {
+          margin-top: 1rem;
+        }
+
+        .attachments-title {
+          font-weight: 600;
+          color: #374151;
+          margin: 0 0 0.75rem;
+        }
+
+        .attachments-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+
+        .attachment-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 0.75rem;
+          margin-bottom: 0.5rem;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 0.5rem;
+          gap: 1rem;
+        }
+
+        .attachment-info {
+          flex: 1;
+          font-size: 0.9rem;
+          color: #374151;
+        }
+
+        .attachment-actions {
+          display: flex;
+          gap: 0.5rem;
+        }
+
+        .attachment-link {
+          color: #3b82f6;
+          text-decoration: none;
+          font-weight: 500;
+          font-size: 0.9rem;
+        }
+
+        .rag-section {
+          max-width: 1400px;
+          margin: 0 auto;
+          background: white;
+          border-radius: 1rem;
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+          padding: 2rem;
+        }
+
+        .rag-title {
+          font-size: 1.5rem;
+          font-weight: 700;
+          color: #1e293b;
+          margin: 0 0 1.5rem;
+          background: linear-gradient(135deg, #059669, #10b981);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
+
+        .rag-input {
+          display: flex;
+          gap: 1rem;
+          margin-bottom: 1.5rem;
+        }
+
+        .rag-input input {
+          flex: 1;
+          padding: 0.75rem 1rem;
+          border: 1px solid #d1d5db;
+          border-radius: 0.5rem;
+          font-size: 1rem;
+        }
+
+        .rag-input input:focus {
+          outline: none;
+          border-color: #3b82f6;
+        }
+
+        .rag-answer {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 0.75rem;
+          padding: 1.5rem;
+        }
+
+        .rag-route {
+          font-size: 0.9rem;
+          color: #6366f1;
+          font-weight: 600;
+          margin-bottom: 1rem;
+        }
+
+        .rag-answer-title {
+          font-weight: 700;
+          color: #1e293b;
+          margin: 0 0 1rem;
+        }
+
+        .rag-answer-content {
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          color: #374151;
+          line-height: 1.6;
+          margin-bottom: 1.5rem;
+        }
+
+        .rag-sources-title {
+          font-weight: 700;
+          color: #1e293b;
+          margin: 0 0 0.75rem;
+        }
+
+        .rag-sources-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+
+        .rag-sources-list li {
+          padding: 0.5rem;
+          background: white;
+          border: 1px solid #e2e8f0;
+          border-radius: 0.5rem;
+          margin-bottom: 0.5rem;
+          color: #374151;
+          font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+          .app {
+            padding: 1rem;
+          }
+          
+          .users-grid {
+            grid-template-columns: 1fr;
+          }
+          
+          .user-content {
+            grid-template-columns: 1fr;
+          }
+          
+          .messages-panel {
+            border-right: none;
+            border-bottom: 1px solid #e2e8f0;
+          }
+          
+          .controls {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 1rem;
+          }
+          
+          .fetch-control {
+            justify-content: center;
+          }
+        }
+      `}</style>
+
+      <div className="header">
+        <h1>Gmail RAG Assistant</h1>
+        <p>Intelligent email analysis and document processing</p>
+      </div>
+
+      <div className="controls">
+        <button className="btn btn-primary" onClick={loadUsers} disabled={loading}>
+          Load Users
+        </button>
+
+        <div className="fetch-control">
+          <label htmlFor="fetchCount">Fetch last:</label>
           <input
             id="fetchCount"
             type="range"
@@ -215,99 +649,113 @@ export default function App() {
             value={fetchCount}
             onChange={(e) => setFetchCount(parseInt(e.target.value))}
           />
-          <span style={{ width: 24, textAlign: "right" }}>{fetchCount}</span>
+          <span>{fetchCount}</span>
           <span>messages</span>
         </div>
 
-        <button onClick={() => updateEmails(fetchCount)} disabled={loading || users.length === 0}>
+        <button 
+          className="btn btn-primary" 
+          onClick={() => updateEmails(fetchCount)} 
+          disabled={loading || users.length === 0}
+        >
           Update Emails
         </button>
       </div>
 
-      {error && <div style={{ color: "red" }}>{error}</div>}
+      {error && <div className="error">{error}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="users-grid">
         {users.map((u) => (
-          <div key={u.slot} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
-            <div style={{ marginBottom: 8 }}>
-              <strong>User {u.slot}:</strong> {u.email || "(not configured)"}
+          <div key={u.slot} className="user-card">
+            <div className="user-header">
+              <h3 className="user-title">User {u.slot}</h3>
+              <p className="user-email">{u.email || "(not configured)"}</p>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
-              <div>
-                <h4 style={{ margin: 0 }}>Messages</h4>
-                <ul style={{ listStyle: "none", padding: 0, maxHeight: 300, overflow: "auto" }}>
+            <div className="user-content">
+              <div className="messages-panel">
+                <h4 className="messages-title">Messages</h4>
+                <ul className="messages-list">
                   {(messagesByUser[u.slot] || []).map((m) => (
-                    <li key={m.id} style={{ marginBottom: 6 }}>
+                    <li key={m.id} className="message-item">
                       <button
-                        style={{ width: "100%", textAlign: "left" }}
+                        className="message-btn"
                         onClick={() => setSelected((prev) => ({ ...prev, [u.slot]: m }))}
                       >
-                        <strong>{m.subject || "(no subject)"} </strong>
-                        <div style={{ fontSize: 12, opacity: 0.7 }}>{m.from} — {m.date}</div>
+                        <span className="message-subject">{m.subject || "(no subject)"}</span>
+                        <div className="message-meta">{m.from} — {m.date}</div>
                       </button>
                     </li>
                   ))}
                 </ul>
               </div>
 
-              <div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <h4 style={{ margin: 0, flex: 1 }}>Preview</h4>
-                  <div style={{ display: "flex", gap: 8 }}>
+              <div className="preview-panel">
+                <div className="preview-header">
+                  <h4 className="preview-title">Preview</h4>
+                  <div className="preview-toggle">
                     <button
+                      className="btn btn-secondary"
                       onClick={() => setShowEncrypted((prev) => ({ ...prev, [u.slot]: false }))}
                       disabled={!showEncrypted[u.slot]}
                     >
-                      Show Normal
+                      Normal
                     </button>
                     <button
+                      className="btn btn-secondary"
                       onClick={() => setShowEncrypted((prev) => ({ ...prev, [u.slot]: true }))}
                       disabled={showEncrypted[u.slot]}
                     >
-                      Show Encrypted
+                      Encrypted
                     </button>
                   </div>
                 </div>
 
                 {selected[u.slot] ? (
-                  <div
-                    style={{
-                      whiteSpace: "pre-wrap",
-                      overflowWrap: "anywhere",
-                      wordBreak: "break-word",
-                      maxHeight: 300,
-                      overflow: "auto",
-                      border: "1px solid #eee",
-                      padding: 8
-                    }}
-                  >
+                  <div className="preview-content">
                     {showEncrypted[u.slot]
                       ? toBase64Unicode(selected[u.slot]?.combined_text || "")
                       : (selected[u.slot]?.combined_text || "")
                     }
                   </div>
                 ) : (
-                  <div style={{ color: "#666" }}>Select a message to preview.</div>
+                  <div className="preview-empty">Select a message to preview</div>
                 )}
 
-                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-                  <button onClick={() => loadAttachments(u.slot)} disabled={!selected[u.slot] || loading}>Load Attachments</button>
-                  <button onClick={() => ingestMailBody(u.slot)} disabled={!selected[u.slot] || loading}>Ingest Mail Body</button>
-                  {ingestStatus && <span style={{ fontSize: 12, opacity: 0.8 }}>{ingestStatus}</span>}
+                <div className="actions">
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => loadAttachments(u.slot)} 
+                    disabled={!selected[u.slot] || loading}
+                  >
+                    Load Attachments
+                  </button>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => ingestMailBody(u.slot)} 
+                    disabled={!selected[u.slot] || loading}
+                  >
+                    Ingest Mail Body
+                  </button>
+                  {ingestStatus && <span className="status">{ingestStatus}</span>}
                 </div>
+
                 {(attachmentsByUser[u.slot] || []).length > 0 && (
-                  <div style={{ marginTop: 6 }}>
-                    <strong>Attachments</strong>
-                    <ul style={{ listStyle: "none", padding: 0 }}>
+                  <div className="attachments">
+                    <h5 className="attachments-title">Attachments</h5>
+                    <ul className="attachments-list">
                       {(attachmentsByUser[u.slot] || []).map((a) => (
-                        <li key={a.index} style={{ marginBottom: 6, display: "flex", justifyContent: "space-between", gap: 8 }}>
-                          <div>
+                        <li key={a.index} className="attachment-item">
+                          <div className="attachment-info">
                             {a.filename || `attachment-${a.index}`} ({a.content_type || "?"}, {Math.round((a.size || 0)/1024)} KB)
                           </div>
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <a href={`${BACKEND}${a.download_url}`} target="_blank" rel="noreferrer">Download</a>
-                            <button onClick={() => ingestAttachment(u.slot, a)}>Ingest</button>
+                          <div className="attachment-actions">
+                            <a href={`${BACKEND}${a.download_url}`} target="_blank" rel="noreferrer" className="attachment-link">
+                              Download
+                            </a>
+                            <button className="btn btn-secondary" onClick={() => ingestAttachment(u.slot, a)}>
+                              Ingest
+                            </button>
                           </div>
                         </li>
                       ))}
@@ -320,23 +768,32 @@ export default function App() {
         ))}
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <h3>Ask RAG</h3>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask a question..." style={{ flex: 1 }} />
-          <button onClick={askRag} disabled={!question.trim()}>Ask</button>
+      <div className="rag-section">
+        <h3 className="rag-title">Ask RAG Assistant</h3>
+        <div className="rag-input">
+          <input 
+            value={question} 
+            onChange={(e) => setQuestion(e.target.value)} 
+            onKeyPress={handleKeyPress}
+            placeholder="Ask a question about your emails..." 
+          />
+          <button className="btn btn-primary" onClick={askRag} disabled={!question.trim()}>
+            Ask
+          </button>
         </div>
         {ragAnswer && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ marginBottom: 4 }}><strong>Route:</strong> {ragRoute || ""}</div>
-            <strong>Answer</strong>
-            <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>{ragAnswer}</div>
+          <div className="rag-answer">
+            {ragRoute && <div className="rag-route">Route: {ragRoute}</div>}
+            <h4 className="rag-answer-title">Answer</h4>
+            <div className="rag-answer-content">{ragAnswer}</div>
             {ragSources?.length > 0 && (
               <>
-                <strong>Sources</strong>
-                <ul>
+                <h4 className="rag-sources-title">Sources</h4>
+                <ul className="rag-sources-list">
                   {ragSources.map((s, i) => (
-                    <li key={i}>{s.subject || s.filename} {s.page ? `(page ${s.page})` : s.sheet ? `(sheet ${s.sheet})` : ""}</li>
+                    <li key={i}>
+                      {s.subject || s.filename} {s.page ? `(page ${s.page})` : s.sheet ? `(sheet ${s.sheet})` : ""}
+                    </li>
                   ))}
                 </ul>
               </>
